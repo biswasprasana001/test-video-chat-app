@@ -30,7 +30,7 @@ export default function Lobby() {
         const { email, room } = data;
         // We're navigating to the room page.
         navigate(`/room/${room}`);
-    }, []);
+    }, [navigate]);
 
     // We're using the useEffect hook to add and remove event listeners on the socket.
     useEffect(() => {

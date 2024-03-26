@@ -1,41 +1,103 @@
-// We're importing the React library, along with the useState, useCallback, and useEffect hooks.
 import React, { useCallback, useEffect, useState } from 'react'
-// We're importing the useSocket custom hook from our context. This hook provides us with the socket instance we need for real-time communication.
 import { useSocket } from '../context/socketProvider'
+import ReactPlayer from 'react-player/lazy'
+import peer from '../service/peer'
 
-// We're defining a functional component called Room.
 const Room = () => {
-    // We're getting the socket instance using our custom hook.
     const socket = useSocket();
-    // We're using the useState hook to create a state variable for remoteSocketId, and its corresponding setter function.
     const [remoteSocketId, setRemoteSocketId] = useState(null);
-    // We're defining a function called handleUserJoined using the useCallback hook. This function will be called when a 'user:joined' event is received on the socket.
-    const handleUserJoined = useCallback(({email, id}) => {
-        // We're logging the email and room ID of the user who joined.
+    const [myStream, setMyStream] = useState(null);
+    const [remoteStream, setRemoteStream] = useState(null);
+
+    const handleUserJoined = useCallback(({ email, id }) => {
         console.log(`Email ${email} joined room ${id}`);
-        // We're setting the remoteSocketId state variable to the ID of the user who joined.
         setRemoteSocketId(id);
+    }, []);
+
+    const handleCallUser = useCallback(async () => {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        const offer = await peer.getOffer();
+        socket.emit('call:user', { to: remoteSocketId, offer });
+        setMyStream(stream);
+    }, [socket, remoteSocketId])
+
+    const handleIncomingCall = useCallback(async ({ from, offer }) => {
+        setRemoteSocketId(from);
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        setMyStream(stream);
+        console.log(`Incoming call from ${from} with offer ${offer}`);
+        const ans = await peer.getAnswer(offer);
+        socket.emit('call:accepted', { to: from, ans });
+    }, [socket]);
+
+    const sendStreams = useCallback(() => {
+        for (const track of myStream.getTracks()) {
+            peer.peer.addTrack(track, myStream);
+        }
+    }, [myStream]);
+
+    const handleCallAccepted = useCallback(({ from, ans }) => {
+        console.log(`Call accepted from ${from} with answer ${ans}`);
+        sendStreams();
+    }, [sendStreams]);
+
+    const handleNegotionNeeded = useCallback(async () => {
+        const offer = await peer.getOffer();
+        socket.emit('peer:nego:needeed', { offer, to: remoteSocketId });
+    }, [socket, remoteSocketId]);
+
+    const handleNegoNeedIncoming = useCallback(async ({ from, offer }) => {
+        const ans = await peer.getAnswer(offer);
+        socket.emit('peer:nego:done', { to: from, ans });
+    }, [socket, remoteSocketId]);
+
+    const handleNegoNeedFinal = useCallback(({ ans }) => {
+        peer.setLocalDescription(ans);
+    }, [socket, remoteSocketId]);
+
+    useEffect(() => {
+        peer.peer.addEventListener('negotionneeded', handleNegotionNeeded)
+        return () => {
+            peer.peer.removeEventListener('negotionneeded', handleNegotionNeeded)
+        }
+    }, [handleNegotionNeeded])
+
+    useEffect(() => {
+        peer.peer.addEventListener('track', async ({ streams: [remoteStream] }) => {
+            setRemoteStream(remoteStream[0]);
+        })
     }, [])
 
-    // We're using the useEffect hook to add and remove event listeners on the socket.
     useEffect(() => {
-        // When the component mounts, we're adding a 'user:joined' event listener on the socket.
         socket.on('user:joined', handleUserJoined);
-        // When the component unmounts, we're removing the 'user:joined' event listener from the socket.
-        return () => socket.off('user:joined', handleUserJoined);
-    }, [socket, handleUserJoined])
+        socket.on('incoming:call', handleIncomingCall);
+        socket.on('call:accepted', handleCallAccepted);
+        socket.on('peer:nego:needeed', handleNegoNeedIncoming);
+        socket.on('peer:nego:final', handleNegoNeedFinal);
+        return () => {
+            socket.off('user:joined', handleUserJoined);
+            socket.off('incoming:call', handleIncomingCall);
+            socket.off('call:accepted', handleCallAccepted);
+            socket.off('peer:nego:needeed', handleNegoNeedIncoming);
+            socket.off('peer:nego:final', handleNegoNeedFinal);
+        };
 
-    // The component returns a JSX element.
+    }, [socket, handleUserJoined, handleIncomingCall, handleCallAccepted]);
+
     return (
-        // We're creating a div element.
         <div>
-            // Inside the div, we're creating a heading and a paragraph.
             <h1>Room</h1>
-            // The paragraph displays a message based on whether remoteSocketId is truthy or falsy.
             <h4>{remoteSocketId ? 'Someone is in the room' : 'No one is in the room'}</h4>
+            {/* {myStream && <button onClick={sendStreams}>Send Streams</button>} */}
+            {remoteSocketId && <button onClick={handleCallUser}>Call</button>}
+            {
+                myStream && <ReactPlayer url={myStream} playing={true} width={"25%"} height={"25%"} />
+            }
+            {
+                remoteStream && <ReactPlayer url={remoteStream} playing={true} width={"25%"} height={"25%"} />
+            }
         </div>
     )
 }
 
-// We're exporting the Room component as the default export of this module.
 export default Room
